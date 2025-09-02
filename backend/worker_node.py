@@ -7,7 +7,9 @@ import base64
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, Subset
+import torchvision
+import torchvision.transforms as transforms
 import uvicorn
 from fastapi import FastAPI, WebSocket
 import websockets
@@ -16,7 +18,8 @@ import threading
 from typing import Dict, Set
 from master_server import MessageType
 
-from model import SimpleModel
+# Import the new CNNModel
+from model import CNNModel
 
 class WorkerNode:
     def __init__(self, node_id: str, master_host='localhost', master_port=8000, 
@@ -27,7 +30,8 @@ class WorkerNode:
         self.worker_port = worker_port
         self.websocket_port = websocket_port
         
-        self.model = SimpleModel()
+        # Use the new CNNModel
+        self.model = CNNModel()
         self.status = 'idle'
         self.current_epoch = 0
         self.current_loss = 0.0
@@ -37,18 +41,43 @@ class WorkerNode:
         self.peer_workers: Dict[str, dict] = {}
         self.seen_messages: Set[str] = set()
         
-        self.train_data = self.generate_dummy_data()
+        # Load a partition of the real CIFAR-10 dataset
+        print("Loading CIFAR-10 data partition...")
+        self.train_data = self.load_real_data()
+        print("Data loaded successfully.")
         
         self.master_websocket = None
         
         self.app = FastAPI(title=f"Worker Node {self.node_id}")
         self.setup_routes()
     
-    def generate_dummy_data(self, num_samples=1000):
-        X = torch.randn(num_samples, 784)
-        y = torch.randint(0, 10, (num_samples,))
-        return DataLoader(TensorDataset(X, y), batch_size=32, shuffle=True)
-    
+    def load_real_data(self, num_samples=5000):
+        """
+        Downloads the CIFAR-10 dataset and creates a random subset for this worker.
+        This simulates a real-world federated learning scenario.
+        """
+        # Define transformations for the images
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+            # Normalize the images to be in the range [-1, 1]
+            transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))
+        ])
+
+        # Download the full training dataset
+        full_train_dataset = torchvision.datasets.CIFAR10(
+            root='./data', train=True, download=True, transform=transform
+        )
+
+        # Create a random subset of indices for this worker
+        num_total_samples = len(full_train_dataset)
+        random_indices = np.random.choice(num_total_samples, num_samples, replace=False)
+        
+        # Create a subset of the dataset using the random indices
+        worker_dataset = Subset(full_train_dataset, random_indices) # type: ignore
+
+        # Create a DataLoader for the worker's dataset partition
+        return DataLoader(worker_dataset, batch_size=32, shuffle=True)
+
     def setup_routes(self):
         @self.app.websocket("/ws")
         async def websocket_endpoint(websocket: WebSocket):
@@ -110,33 +139,84 @@ class WorkerNode:
             print(f"Connection to master lost: {e}")
         except Exception as e:
             print(f"Error listening to master: {e}")
-    
+        
+    # Replace the existing send_heartbeat method with this one
     async def send_heartbeat(self):
+        """Periodically sends a heartbeat to the master."""
         while True:
             if not self.master_websocket:
                 print("Master websocket not available. Heartbeat paused.")
                 break
+            await self._send_heartbeat_payload()
+            await asyncio.sleep(10) # Regular heartbeat every 10 seconds
 
-            try:
-                heartbeat = {
-                    'type': MessageType.HEARTBEAT.value,
-                    'node_id': self.node_id,
-                    'status': self.status,
-                    'current_epoch': self.current_epoch,
-                    'loss': self.current_loss,
-                    'model_version': self.model_version,
-                    'timestamp': time.time()
-                }
+    async def _send_heartbeat_payload(self):
+        """Constructs and sends a single heartbeat message."""
+        try:
+            heartbeat = {
+                'type': MessageType.HEARTBEAT.value,
+                'node_id': self.node_id,
+                'status': self.status,
+                'current_epoch': self.current_epoch,
+                'loss': self.current_loss,
+                'model_version': self.model_version,
+                'timestamp': time.time()
+            }
+            if self.master_websocket:
                 await self.master_websocket.send(json.dumps(heartbeat))
 
-            except websockets.exceptions.ConnectionClosed:
-                print("Heartbeat failed: Connection is closed.")
-                break
-            except Exception as e:
-                print(f"Heartbeat failed with an unexpected error: {e}")
-                break
+        except websockets.exceptions.ConnectionClosed:
+            print("Heartbeat failed: Connection is closed.")
+        except Exception as e:
+            print(f"Heartbeat failed with an unexpected error: {e}")
 
-            await asyncio.sleep(10)
+    # Replace the existing train_model method with this one
+    async def train_model(self, epochs):
+        print(f"Starting local training for {epochs} epochs")
+        self.status = 'training'
+        
+        optimizer = optim.Adam(self.model.parameters(), lr=0.001)
+        criterion = nn.CrossEntropyLoss()
+        
+        for epoch in range(epochs):
+            self.current_epoch = epoch + 1
+            epoch_loss = 0.0
+            num_batches = 0
+            
+            for batch_images, batch_labels in self.train_data:
+                optimizer.zero_grad()
+                outputs = self.model(batch_images)
+                loss = criterion(outputs, batch_labels)
+                loss.backward()
+                optimizer.step()
+                
+                epoch_loss += loss.item()
+                num_batches += 1
+            
+            self.current_loss = epoch_loss / num_batches
+            print(f"Worker {self.node_id} - Epoch {self.current_epoch}, Loss: {self.current_loss:.4f}")
+            
+            # <<< --- NEW: Send a real-time update after each epoch --- >>>
+            await self._send_heartbeat_payload()
+            
+            await asyncio.sleep(0.1) # Short delay to make training visible on the frontend
+        
+        self.status = 'completed'
+        
+        completion_message = {
+            'type': MessageType.TRAINING_COMPLETE.value,
+            'node_id': self.node_id,
+            'data': {
+                'session_id': self.training_session_id,
+                'model_version': self.model_version,
+                'final_loss': self.current_loss
+            },
+            'timestamp': time.time()
+        }
+        if self.master_websocket:
+            await self.master_websocket.send(json.dumps(completion_message))
+        
+        print(f"Worker {self.node_id} completed training")
     
     async def handle_gossip_message(self, message_data: dict):
         try:
@@ -207,6 +287,7 @@ class WorkerNode:
     async def propagate_gossip(self, message_data: dict):
         for peer_id, peer_info in self.peer_workers.items():
             try:
+                # Logic to connect and send to peers can be added here
                 pass
             except Exception as e:
                 print(f"Failed to propagate gossip to {peer_id}: {e}")
@@ -215,50 +296,8 @@ class WorkerNode:
         buffer = pickle.dumps(model.state_dict())
         return base64.b64encode(buffer).decode('utf-8')
     
-    async def train_model(self, epochs):
-        print(f"Starting local training for {epochs} epochs")
-        self.status = 'training'
-        
-        optimizer = optim.Adam(self.model.parameters(), lr=0.001)
-        criterion = nn.CrossEntropyLoss()
-        
-        for epoch in range(epochs):
-            self.current_epoch = epoch + 1
-            epoch_loss = 0.0
-            num_batches = 0
-            
-            for batch_x, batch_y in self.train_data:
-                optimizer.zero_grad()
-                outputs = self.model(batch_x)
-                loss = criterion(outputs, batch_y)
-                loss.backward()
-                optimizer.step()
-                
-                epoch_loss += loss.item()
-                num_batches += 1
-            
-            self.current_loss = epoch_loss / num_batches
-            print(f"Worker {self.node_id} - Epoch {self.current_epoch}, Loss: {self.current_loss:.4f}")
-            
-            await asyncio.sleep(0.5)
-        
-        self.status = 'completed'
-        
-        completion_message = {
-            'type': MessageType.TRAINING_COMPLETE.value,
-            'node_id': self.node_id,
-            'data': {
-                'session_id': self.training_session_id,
-                'model_version': self.model_version,
-                'final_loss': self.current_loss
-            },
-            'timestamp': time.time()
-        }
-        if self.master_websocket:
-            await self.master_websocket.send(json.dumps(completion_message))
-        
-        print(f"Worker {self.node_id} completed training")
-        
+
+# The rest of the file (argparse and main execution block) remains the same
 import argparse
 
 if __name__ == "__main__":
@@ -267,7 +306,7 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, required=True, help="HTTP port for the worker's API.")
     parser.add_argument("--ws-port", type=int, required=True, help="WebSocket port for the worker's gossip protocol.")
     parser.add_argument("--master-host", default="localhost", help="Host of the master server.")
-    parser.add_argument("--master-port", type=int, default=8001, help="WebSocket port of the master server.")
+    parser.add_argument("--master-port", type=int, default=8000, help="WebSocket port of the master server.")
     args = parser.parse_args()
 
     worker = WorkerNode(

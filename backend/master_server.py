@@ -4,22 +4,18 @@ import time
 import uuid
 import pickle
 import base64
-from datetime import datetime
 from typing import Dict, List, Optional, Set
 from dataclasses import dataclass, asdict
 from enum import Enum
 
-from utils import HTML_INTERFACE
-import torch
-import torch.nn as nn
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
-from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
-import websockets
-from model import SimpleModel
-from contextlib import asynccontextmanager
+from fastapi.middleware.cors import CORSMiddleware
+
+# Ensure you are importing the final, smaller CNNModel
+from model import CNNModel
 
 class MessageType(Enum):
     GOSSIP = "gossip"
@@ -32,7 +28,7 @@ class MessageType(Enum):
 
 class TrainingStatus(Enum):
     IDLE = "idle"
-    INITIALIZING = "initializing" 
+    INITIALIZING = "initializing"
     TRAINING = "training"
     AGGREGATING = "aggregating"
     COMPLETED = "completed"
@@ -59,8 +55,6 @@ class GossipMessage:
     data: dict
     ttl: int = 3
 
-
-
 class MasterServer:
     def __init__(self, port=8000):
         self.port = port
@@ -68,23 +62,34 @@ class MasterServer:
         self.connected_websockets: Dict[str, WebSocket] = {}
         self.training_session_id: Optional[str] = None
         self.training_status = TrainingStatus.IDLE
-        self.global_model = SimpleModel()
+        self.global_model = CNNModel()
         self.model_version = 0
         self.target_epochs = 20
         self.current_round = 0
         self.max_rounds = 5
         self.seen_messages: Set[str] = set()
         
-        self.message_queue = asyncio.Queue()
+        # List to store incoming model updates for the current round
+        self.model_updates: List[dict] = []
         
+        self.templates = Jinja2Templates(directory="templates")
         self.app = FastAPI(title="Federated ML Master Server")
+        
+        self.app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+        
         self.setup_routes()
-        
+
     def setup_routes(self):
-        @self.app.get("/")
-        async def dashboard():
-            return HTMLResponse(HTML_INTERFACE)
-        
+        @self.app.get("/", response_class=HTMLResponse)
+        async def dashboard(request: Request):
+            return self.templates.TemplateResponse("main.html", {"request": request})
+
         @self.app.websocket("/ws/{node_id}")
         async def websocket_endpoint(websocket: WebSocket, node_id: str):
             await websocket.accept()
@@ -102,10 +107,6 @@ class MasterServer:
                     del self.connected_websockets[node_id]
                 if node_id in self.workers:
                     self.workers[node_id].status = "failed"
-        
-        @self.app.get("/api/workers")
-        async def get_workers():
-            return [asdict(worker) for worker in self.workers.values()]
         
         @self.app.get("/api/training_status")
         async def get_training_status():
@@ -158,6 +159,10 @@ class MasterServer:
     
     async def handle_websocket_message(self, node_id: str, message_data: dict):
         try:
+            if 'type' not in message_data:
+                print(f"Received message without 'type' from {node_id}: {message_data}")
+                return
+
             message_type = MessageType(message_data['type'])
             
             if message_type == MessageType.WORKER_JOIN:
@@ -166,6 +171,11 @@ class MasterServer:
                 await self.handle_heartbeat(node_id, message_data)
             elif message_type == MessageType.TRAINING_COMPLETE:
                 await self.handle_training_complete(node_id, message_data)
+            elif message_type == MessageType.MODEL_UPDATE:
+                if message_data.get('data', {}).get('action') == 'model_response':
+                    print(f"Received model update from {node_id}")
+                    state_dict = self.deserialize_model(message_data['data']['model_data'])
+                    self.model_updates.append(state_dict)
             elif message_type == MessageType.GOSSIP:
                 await self.handle_gossip_message(message_data)
                 
@@ -200,11 +210,20 @@ class MasterServer:
             worker.status = data.get('status', worker.status)
             worker.current_epoch = data.get('current_epoch', worker.current_epoch)
             worker.loss = data.get('loss', worker.loss)
-    
+            
+            gossip_msg = GossipMessage(
+                message_id=str(uuid.uuid4()),
+                message_type=MessageType.HEARTBEAT,
+                sender_id="master",
+                timestamp=time.time(),
+                data=data
+            )
+            await self.broadcast_gossip_message(gossip_msg)
+            
     async def handle_training_complete(self, node_id: str, data: dict):
         if node_id in self.workers:
             self.workers[node_id].status = 'completed'
-            self.workers[node_id].model_version = data.get('model_version', 0)
+            self.workers[node_id].model_version = data.get('data', {}).get('model_version', 0)
             print(f"Worker {node_id} completed training")
     
     async def handle_gossip_message(self, message_data: dict):
@@ -224,7 +243,7 @@ class MasterServer:
             message.ttl -= 1
             await self.broadcast_gossip_message(message, exclude_sender=message.sender_id)
     
-    async def broadcast_gossip_message(self, message: GossipMessage, exclude_sender: str = None): # type: ignore
+    async def broadcast_gossip_message(self, message: GossipMessage, exclude_sender: str = None):
         message_dict = asdict(message)
         
         if 'message_type' in message_dict and isinstance(message_dict['message_type'], Enum):
@@ -250,13 +269,6 @@ class MasterServer:
     
     async def run_federated_training(self):
         try:
-            active_workers = [w for w in self.workers.values() if w.status == 'idle']
-            if not active_workers:
-                self.training_status = TrainingStatus.IDLE
-                return
-            
-            print(f"Starting federated training with {len(active_workers)} workers")
-            
             for round_num in range(self.max_rounds):
                 self.current_round = round_num + 1
                 self.training_status = TrainingStatus.TRAINING
@@ -295,18 +307,32 @@ class MasterServer:
             self.training_status = TrainingStatus.FAILED
     
     async def wait_for_training_completion(self):
-        while True:
+        timeout = 120  # 2-minute timeout for a training round
+        start_time = time.time()
+        while time.time() - start_time < timeout:
             active_workers = [w for w in self.workers.values() if w.status != 'failed']
+            if not active_workers:
+                print("No active workers left. Stopping round.")
+                break
+
             completed_workers = [w for w in active_workers if w.status == 'completed']
             
-            if len(completed_workers) == len(active_workers) and len(active_workers) > 0:
-                break
+            if len(completed_workers) >= len(active_workers):
+                print("All active workers completed training.")
+                return
             
             await asyncio.sleep(2)
+        print("Training round timed out.")
     
     async def aggregate_models(self):
         print("Aggregating models...")
+        self.model_updates = []
         
+        completed_workers = [w for w in self.workers.values() if w.status == 'completed']
+        if not completed_workers:
+            print("No models to aggregate.")
+            return
+
         model_requests = GossipMessage(
             message_id=str(uuid.uuid4()),
             message_type=MessageType.MODEL_UPDATE,
@@ -316,15 +342,40 @@ class MasterServer:
         )
         await self.broadcast_gossip_message(model_requests)
         
-        await asyncio.sleep(5)
+        timeout = 30
+        start_time = time.time()
+        while len(self.model_updates) < len(completed_workers):
+            if time.time() - start_time > timeout:
+                print("Aggregation timed out. Proceeding with received models.")
+                break
+            await asyncio.sleep(1)
+
+        if not self.model_updates:
+            print("No models were received for aggregation.")
+            return
+
+        print(f"Aggregating {len(self.model_updates)} models...")
+        avg_state_dict = self.model_updates[0]
+        
+        for key in avg_state_dict.keys():
+            for i in range(1, len(self.model_updates)):
+                avg_state_dict[key] += self.model_updates[i][key]
+            avg_state_dict[key] = avg_state_dict[key] / len(self.model_updates)
+
+        self.global_model.load_state_dict(avg_state_dict)
         
         for worker in self.workers.values():
             if worker.status == 'completed':
                 worker.status = 'idle'
                 worker.current_epoch = 0
         
-        print(f"Aggregated models for round {self.current_round}")
+        print(f"Aggregation complete for round {self.current_round}")
         
 if __name__ == "__main__":
     server = MasterServer(port=8000)
-    uvicorn.run(server.app, host="0.0.0.0", port=8000)
+    uvicorn.run(
+        server.app, 
+        host="0.0.0.0", 
+        port=8000, 
+        ws_max_size=3000000 
+    )

@@ -1,0 +1,1003 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Federated Learning Network Dashboard</title>
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        /* --- Professional Dashboard Styles --- */
+
+        /* 1. Use CSS Variables for a consistent and easily themeable color palette */
+        :root {
+            --bg-primary: #111827;
+            /* Dark Slate */
+            --bg-secondary: #1F2937;
+            /* Lighter Slate for panels */
+            --border-color: rgba(255, 255, 255, 0.1);
+            --text-primary: #E5E7EB;
+            /* Light Gray */
+            --text-secondary: #9CA3AF;
+            /* Medium Gray */
+            --accent-primary: #3B82F6;
+            /* Professional Blue */
+            --accent-hover: #60A5FA;
+
+            --status-green: #10B981;
+            --status-yellow: #F59E0B;
+            --status-blue: #3B82F6;
+            --status-purple: #8B5CF6;
+            --status-red: #EF4444;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-primary);
+            /* 2. Solid, professional background */
+            color: var(--text-primary);
+            overflow: hidden;
+            height: 100vh;
+        }
+
+        /* --- Graph & HUDs --- */
+        #network-graph {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+
+        .hud {
+            position: absolute;
+            background-color: var(--bg-secondary);
+            /* 3. Subtle panel background */
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            /* Softer radius */
+            padding: 20px;
+            z-index: 10;
+            /* 4. More subtle, modern shadow */
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+            transition: box-shadow 0.2s ease-in-out;
+        }
+
+        .hud:hover {
+            box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+        }
+
+        .status-panel {
+            top: 20px;
+            left: 20px;
+            width: 320px;
+            max-height: 450px;
+            overflow-y: auto;
+        }
+
+        .metrics-panel {
+            top: 20px;
+            right: 20px;
+            width: 350px; /* Increased width for better chart view */
+        }
+
+        .controls-panel {
+            bottom: 20px;
+            left: 20px;
+            width: 250px;
+        }
+
+        .log-window {
+            bottom: 20px;
+            right: 20px;
+            width: 450px;
+            height: 300px;
+            border: 1px solid var(--border-color);
+            resize: both;
+            min-width: 300px;
+            min-height: 200px;
+        }
+
+        /* --- UI Components --- */
+        h3 {
+            margin-bottom: 16px;
+            color: var(--text-primary);
+            font-size: 16px;
+            font-weight: 600;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 8px;
+        }
+
+        h4 {
+            margin-top: 16px;
+            margin-bottom: 8px;
+            color: var(--text-secondary);
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .status-card {
+            background: transparent;
+            border: none;
+            padding: 0;
+            margin-bottom: 0;
+        }
+
+        .metric-row {
+            margin-bottom: 12px;
+        }
+
+        .metric-label {
+            color: var(--text-secondary);
+        }
+
+        .metric-value {
+            color: var(--text-primary);
+            font-weight: 500;
+        }
+
+        .progress-bar {
+            background-color: rgba(255, 255, 255, 0.05);
+        }
+
+        .progress-fill {
+            background-color: var(--accent-primary);
+        }
+
+        .status-badge {
+            animation: none;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            margin-bottom: 10px;
+            display: inline-block;
+            color: white;
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.7;
+            }
+        }
+
+        .status-training,
+        .status-aggregating {
+            animation: pulse 2s infinite;
+        }
+
+        .status-idle {
+            background-color: var(--status-green);
+        }
+
+        .status-initializing,
+        .status-aggregating {
+            background-color: var(--status-yellow);
+        }
+
+        .status-training {
+            background-color: var(--status-blue);
+        }
+
+        .status-completed {
+            background-color: var(--status-purple);
+        }
+
+        .status-failed {
+            background-color: var(--status-red);
+        }
+
+        /* --- Buttons --- */
+        .btn {
+            background-color: var(--accent-primary);
+            border: none;
+            border-radius: 6px;
+            padding: 10px 20px;
+            font-weight: 500;
+            transition: background-color 0.2s, transform 0.1s;
+            box-shadow: none;
+            color: white;
+            cursor: pointer;
+            width: 100%;
+            margin-bottom: 10px;
+        }
+
+        .btn:hover {
+            background-color: var(--accent-hover);
+            transform: translateY(-1px);
+            box-shadow: none;
+        }
+
+        .btn:disabled {
+            background-color: var(--bg-secondary);
+            color: var(--text-secondary);
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-danger {
+            background-color: var(--status-red);
+        }
+
+        .btn-danger:hover {
+            background-color: #F87171;
+        }
+
+        /* --- Log Window & Other elements --- */
+        .log-header {
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+            padding: 8px 15px;
+            cursor: move;
+            user-select: none;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: 600;
+        }
+
+        .log-controls {
+            display: flex;
+            gap: 5px;
+        }
+
+        .log-btn {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+
+        .log-btn:hover {
+            opacity: 0.7;
+        }
+
+        .log-btn.close {
+            background: #ff5f57;
+        }
+
+        .log-btn.minimize {
+            background: #ffbd2e;
+        }
+
+        .log-btn.maximize {
+            background: #28ca42;
+        }
+
+        .log-content {
+            background: var(--bg-primary);
+            height: calc(100% - 38px);
+            overflow-y: auto;
+            padding: 10px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+        }
+
+        .log-timestamp {
+            color: var(--text-secondary);
+        }
+
+        .log-master {
+            color: var(--accent-primary);
+        }
+
+        .log-worker {
+            color: var(--status-green);
+        }
+
+        .log-error {
+            color: var(--status-red);
+        }
+
+        .log-warning {
+            color: var(--status-yellow);
+        }
+
+        .log-gossip {
+            color: var(--status-purple);
+        }
+
+        .tooltip {
+            position: absolute;
+            background: #000;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 10px;
+            font-size: 12px;
+            pointer-events: none;
+            z-index: 1000;
+            max-width: 220px;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .chart-container {
+            height: 150px; /* Increased height for better chart view */
+            margin-top: 10px;
+            padding: 5px;
+        }
+
+        .connection-status {
+            position: absolute;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            z-index: 20;
+        }
+
+        .connected {
+            background: rgba(16, 185, 129, 0.2);
+            border: 1px solid var(--status-green);
+            color: var(--status-green);
+        }
+
+        .disconnected {
+            background: rgba(239, 68, 68, 0.2);
+            border: 1px solid var(--status-red);
+            color: var(--status-red);
+        }
+    </style>
+</head>
+
+<body>
+    <div id="network-graph"></div>
+
+    <div id="connection-status" class="connection-status disconnected">Connecting...</div>
+
+    <div class="hud status-panel">
+        <h3>📊 System Status</h3>
+        <div class="status-card">
+            <div id="training-status" class="status-badge status-idle">IDLE</div>
+            <div class="metric-row"><span class="metric-label">Session ID:</span><span id="session-id"
+                    class="metric-value">None</span></div>
+            <div class="metric-row"><span class="metric-label">Training Round:</span><span id="training-round"
+                    class="metric-value">0 / 0</span></div>
+            <div class="progress-bar">
+                <div id="round-progress" class="progress-fill" style="width: 0%"></div>
+            </div>
+        </div>
+        <h4>🔗 Active Workers</h4>
+        <div id="workers-list"></div>
+        <div class="network-info"
+            style="margin-top: 16px; border-top: 1px solid var(--border-color); padding-top: 10px;">
+            <div>Total Nodes: <span id="total-nodes">1</span></div>
+            <div>Network Health: <span id="network-health" style="color: var(--status-green);">100%</span></div>
+        </div>
+    </div>
+
+    <div class="hud metrics-panel">
+        <h3>📈 Performance Metrics</h3>
+        <div class="status-card">
+            <div class="metric-row"><span class="metric-label">Model Version:</span><span id="model-version"
+                    class="metric-value">0</span></div>
+            <div class="metric-row"><span class="metric-label">Active Workers:</span><span id="active-workers"
+                    class="metric-value">0</span></div>
+            <div class="metric-row"><span class="metric-label">Failed Workers:</span><span id="failed-workers"
+                    class="metric-value">0</span></div>
+            <div class="metric-row"><span class="metric-label">Avg Loss:</span><span id="avg-loss"
+                    class="metric-value">N/A</span></div>
+        </div>
+        <div class="chart-container">
+            <canvas id="loss-chart"></canvas>
+        </div>
+    </div>
+
+    <div class="hud controls-panel">
+        <h3>🕹️ Training Controls</h3>
+        <button id="start-training" class="btn">Start Training</button>
+        <button id="stop-training" class="btn btn-danger" disabled>Stop Training</button>
+        <div class="metric-row" style="margin-top: 15px;"><span class="metric-label">Max Rounds:</span><span
+                id="max-rounds" class="metric-value">5</span></div>
+    </div>
+
+    <div class="hud log-window" id="log-window">
+        <div class="log-header" id="log-header">
+            <span>📋 Network Event Log</span>
+            <div class="log-controls">
+                <div class="log-btn minimize" id="minimize-btn"></div>
+                <div class="log-btn maximize" id="maximize-btn"></div>
+                <div class="log-btn close" id="close-btn"></div>
+            </div>
+        </div>
+        <div class="log-content" id="log-content"></div>
+    </div>
+
+    <div class="tooltip hidden" id="tooltip"></div>
+
+    <script>
+ class FederatedLearningDashboard {
+    constructor() {
+        this.graphNodes = null;
+        this.graphEdges = null;
+        this.network = null;
+        this.workers = new Map();
+
+        this.trainingStatus = 'idle';
+        this.pulseInterval = null; // <-- For node pulse animation
+        this.logs = [];
+        
+        // Chart.js properties
+        this.lossHistory = [];
+        this.lossChartInstance = null;
+        
+        this.websocket = null;
+        this.isConnected = false;
+
+        this.initGraph();
+        this.initLossChart(); // <-- Initialize the new chart
+        this.initializeNetworkState();
+
+        this.connectWebSocket();
+        this.setupEventListeners();
+        this.setupDraggableWindow();
+        this.startPolling();
+        
+        this.addLog('SYSTEM', 'Dashboard initializing...');
+    }
+    
+    // ... (rest of the methods are the same until updateSystemStatus)
+
+    async initializeNetworkState() {
+        try {
+            this.addLog('SYSTEM', 'Fetching initial network state...');
+            // Assuming the API endpoint is now /api/training_status which contains worker info
+            const response = await fetch('/api/training_status');
+            if (!response.ok) {
+                throw new Error(`HTTP error! Status: ${response.status}`);
+            }
+            const networkState = await response.json();
+
+            // Create Master Node if not exists
+            if (!this.graphNodes.get('master')) {
+                 this.graphNodes.add({
+                    id: 'master',
+                    label: 'Master', 
+                    shape: 'dot',
+                    color: { background: '#4a9eff', border: '#3b82f6' },
+                    size: 30,
+                    font: { color: 'white' }
+                });
+                this.addLog('SYSTEM', `Master node [master] loaded.`);
+            }
+
+            // Create Worker Nodes
+            const workers = networkState.workers.filter(w => w.node_id !== 'dashboard');
+            
+            if (workers && workers.length > 0) {
+                this.updateWorkersFromAPI(workers);
+                this.addLog('SYSTEM', `Loaded ${workers.length} existing worker(s).`);
+            } else {
+                this.addLog('SYSTEM', 'No active workers found during initialization.');
+            }
+            
+        } catch (error) {
+            this.addLog('ERROR', `Failed to initialize network state: ${error.message}`);
+            if (this.graphNodes.get('master') === null) {
+                this.graphNodes.add({
+                    id: 'master', label: 'Master (Fallback)', shape: 'dot',
+                    color: { background: '#ef4444', border: '#dc2626' }, size: 30
+                });
+            }
+        }
+    }
+
+    updateWorkersFromAPI(workersData) {
+        const actualWorkers = workersData.filter(w => w.node_id !== 'dashboard' && w.node_id);
+        
+        const currentWorkerIds = new Set(actualWorkers.map(w => w.node_id));
+
+        actualWorkers.forEach(workerData => {
+            if (!this.workers.has(workerData.node_id)) {
+                this.handleWorkerJoin(workerData);
+            } else {
+                const worker = this.workers.get(workerData.node_id);
+                Object.assign(worker, workerData); // Update existing worker data
+                this.updateWorkerNode(workerData.node_id, worker);
+            }
+        });
+        
+        // Remove workers that are no longer present
+        this.workers.forEach((worker, nodeId) => {
+            if (!currentWorkerIds.has(nodeId)) {
+                this.graphNodes.remove(nodeId);
+                this.workers.delete(nodeId);
+                this.addLog('SYSTEM', `Worker [${nodeId.substring(0,8)}] disconnected.`);
+            }
+        });
+
+        this.updateWorkersDisplay();
+    }
+    
+    initGraph() {
+        const container = document.getElementById('network-graph');
+        this.graphNodes = new vis.DataSet([]);
+        this.graphEdges = new vis.DataSet([]);
+        const data = { nodes: this.graphNodes, edges: this.graphEdges };
+        const options = {
+            nodes: { shape: 'dot', size: 16, font: { size: 12, color: '#e0e6ed' }, borderWidth: 2, },
+            edges: { width: 1, color: { color: 'rgba(255, 255, 255, 0.2)', highlight: '#4a9eff' }, smooth: { type: 'continuous' } },
+            physics: { forceAtlas2Based: { gravitationalConstant: -35, centralGravity: 0.005, springLength: 250, springConstant: 0.1 }, maxVelocity: 150, solver: 'forceAtlas2Based', timestep: 0.35, stabilization: { iterations: 150 } },
+            interaction: { tooltipDelay: 200, hideEdgesOnDrag: true },
+        };
+        this.network = new vis.Network(container, data, options);
+        this.setupGraphEventListeners();
+    }
+    
+    setupGraphEventListeners() {
+        this.network.on('hoverNode', (params) => {
+            const nodeData = params.node === 'master' 
+                ? { type: 'master' } 
+                : this.workers.get(params.node);
+            if (nodeData) { this.showTooltip(params.event.center, nodeData); }
+        });
+        this.network.on('blurNode', () => {
+            document.getElementById('tooltip').classList.add('hidden');
+        });
+    }
+
+    connectWebSocket() {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const host = window.location.hostname || 'localhost';
+        const wsUrl = `${protocol}//${host}:8000/ws/dashboard`; // Assuming dashboard connects to a specific endpoint
+        try {
+            this.websocket = new WebSocket(wsUrl);
+            this.websocket.onopen = () => {
+                this.isConnected = true;
+                this.updateConnectionStatus(true);
+                this.addLog('SYSTEM', 'WebSocket connected to Master');
+                 // Identify as dashboard
+                this.sendWebSocketMessage({ type: 'worker_join', node_id: 'dashboard', host: 'dashboard', port: 0, websocket_port: 0 });
+            };
+            this.websocket.onmessage = (event) => {
+                try {
+                    const message = JSON.parse(event.data);
+                    this.handleWebSocketMessage(message);
+                } catch (error) { console.error('Failed to parse WebSocket message:', error); }
+            };
+            this.websocket.onclose = () => {
+                this.isConnected = false;
+                this.updateConnectionStatus(false);
+                this.addLog('SYSTEM', 'WebSocket connection lost. Reconnecting...');
+                setTimeout(() => this.connectWebSocket(), 3000);
+            };
+            this.websocket.onerror = (error) => this.addLog('ERROR', 'WebSocket error');
+        } catch (error) {
+            this.addLog('ERROR', 'Failed to connect WebSocket: ' + error.message);
+            setTimeout(() => this.connectWebSocket(), 5000);
+        }
+    }
+
+    sendWebSocketMessage(message) {
+        if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+            this.websocket.send(JSON.stringify(message));
+        }
+    }
+
+    handleWebSocketMessage(message) {
+        const msgType = message.message_type || message.type;
+        const data = message.data || message;
+
+        switch (msgType) {
+            case 'worker_join':
+                if (data.worker && data.worker.node_id !== 'dashboard') {
+                    this.handleWorkerJoin(data.worker);
+                    this.addLog('GOSSIP', `New worker joined: ${data.worker.node_id.substring(0,8)}`);
+                }
+                break;
+            case 'worker_leave':
+                if (data.worker_id) {
+                    this.updateWorkerStatus(data.worker_id, 'failed');
+                    this.addLog('GOSSIP', `Worker left: ${data.worker_id.substring(0,8)}`);
+                }
+                break;
+            case 'heartbeat':
+                 if (data.node_id && data.node_id !== 'dashboard') {
+                    this.updateWorkerFromHeartbeat(data.node_id, data);
+                }
+                break;
+        }
+    }
+
+    updateWorkerFromHeartbeat(nodeId, heartbeatData) {
+        if (this.workers.has(nodeId)) {
+            const worker = this.workers.get(nodeId);
+            worker.last_heartbeat = Date.now() / 1000;
+            if (heartbeatData.status) worker.status = heartbeatData.status;
+            if (heartbeatData.current_epoch !== undefined) worker.current_epoch = heartbeatData.current_epoch;
+            if (heartbeatData.loss !== undefined) worker.loss = heartbeatData.loss;
+            this.updateWorkerNode(nodeId, worker);
+            this.updateWorkersDisplay();
+        } else {
+            // If heartbeat is received from an unknown worker, it might be a reconnect
+            this.fetchWorkers();
+        }
+    }
+    
+    startPolling() {
+        setInterval(() => {
+            this.fetchTrainingStatus();
+        }, 2000);
+        this.fetchTrainingStatus();
+    }
+
+    async fetchTrainingStatus() {
+        try {
+            const response = await fetch('/api/training_status');
+            if (response.ok) {
+                const data = await response.json();
+                this.updateSystemStatus(data);
+                this.updateWorkersFromAPI(data.workers); // Update workers from the same payload
+            }
+        } catch (error) {
+            this.updateConnectionStatus(false);
+        }
+    }
+    
+    handleWorkerJoin(workerData) {
+        if(this.workers.has(workerData.node_id) || workerData.node_id === 'dashboard') return;
+        
+        const worker = { ...workerData, last_heartbeat: Date.now() / 1000 };
+        this.workers.set(worker.node_id, worker);
+        
+        // Add node to graph if it doesn't exist
+        if (!this.graphNodes.get(worker.node_id)) {
+            this.graphNodes.add({ 
+                id: worker.node_id, 
+                label: worker.node_id.substring(0, 6), 
+                color: this.getStatusColor(worker.status),
+                size: 16 // Default worker size
+            });
+            this.graphEdges.add({ from: worker.node_id, to: 'master' });
+        }
+        this.updateWorkersDisplay();
+    }
+
+    updateWorkerNode(nodeId, worker) {
+        // Update color based on status, but don't override pulsing size
+        const currentNode = this.graphNodes.get(nodeId);
+        const updatePayload = { 
+            id: nodeId, 
+            color: this.getStatusColor(worker.status)
+        };
+        // If node is not pulsing, ensure it has the correct size
+        if (!this.pulseInterval) {
+            updatePayload.size = 16;
+        }
+        this.graphNodes.update(updatePayload);
+    }
+    
+    updateWorkerStatus(nodeId, status, additionalData = {}) {
+        if (this.workers.has(nodeId)) {
+            const worker = this.workers.get(nodeId);
+            worker.status = status;
+            worker.last_heartbeat = Date.now() / 1000;
+            Object.assign(worker, additionalData);
+            this.updateWorkerNode(nodeId, worker);
+            this.updateWorkersDisplay();
+        }
+    }
+
+    getStatusColor(status) {
+        const colors = {
+            'idle': { background: '#10b981', border: '#059669', highlight: { background: '#34D399', border: '#059669' } },
+            'initializing': { background: '#f59e0b', border: '#d97706', highlight: { background: '#FBBF24', border: '#d97706' } },
+            'training': { background: '#3b82f6', border: '#2563eb', highlight: { background: '#60A5FA', border: '#2563eb' } },
+            'completed': { background: '#8b5cf6', border: '#7c3aed', highlight: { background: '#A78BFA', border: '#7c3aed' } },
+            'failed': { background: '#ef4444', border: '#dc2626', highlight: { background: '#F87171', border: '#dc2626' } },
+            'aggregating': { background: '#f59e0b', border: '#d97706', highlight: { background: '#FBBF24', border: '#d97706' } }
+        };
+        return colors[status] || { background: '#6b7280', border: '#4b5563', highlight: { background: '#9CA3AF', border: '#4b5563' } };
+    }
+
+    showTooltip(position, userData) {
+        const tooltip = document.getElementById('tooltip');
+        if (userData.type === 'master') {
+            tooltip.innerHTML = `<strong>Master Server</strong><br>Status: ${this.isConnected ? 'Connected' : 'Disconnected'}<br>Model Version: ${document.getElementById('model-version').textContent}`;
+        } else {
+            tooltip.innerHTML = `<strong>${userData.node_id}</strong><br>Host: ${userData.host}:${userData.port}<br>Status: <span style="text-transform: capitalize;">${userData.status}</span><br>Epoch: ${userData.current_epoch || 0}<br>Loss: ${(userData.loss || 0).toFixed(4)}<br>Last Seen: ${this.formatTimestamp(userData.last_heartbeat)}`;
+        }
+        tooltip.style.left = position.x + 15 + 'px';
+        tooltip.style.top = position.y + 15 + 'px';
+        tooltip.classList.remove('hidden');
+    }
+
+    updateSystemStatus(data) {
+        // Handle node pulsing based on status
+        const isActive = data.training_status === 'training' || data.training_status === 'aggregating';
+        if (isActive && !this.pulseInterval) {
+            this.startNodePulse();
+        } else if (!isActive && this.pulseInterval) {
+            this.stopNodePulse();
+        }
+
+        this.trainingStatus = data.training_status;
+        const statusBadge = document.getElementById('training-status');
+        statusBadge.textContent = data.training_status.toUpperCase();
+        statusBadge.className = `status-badge status-${data.training_status}`;
+        document.getElementById('session-id').textContent = data.session_id || 'None';
+        document.getElementById('training-round').textContent = `${data.current_round} / ${data.max_rounds}`;
+        document.getElementById('model-version').textContent = data.model_version;
+        document.getElementById('active-workers').textContent = data.active_workers;
+        const progress = data.max_rounds > 0 ? (data.current_round / data.max_rounds) * 100 : 0;
+        document.getElementById('round-progress').style.width = progress + '%';
+        const startBtn = document.getElementById('start-training');
+        const stopBtn = document.getElementById('stop-training');
+        startBtn.disabled = data.training_status !== 'idle' || data.active_workers === 0;
+        stopBtn.disabled = data.training_status === 'idle';
+        this.updateConnectionStatus(true);
+        this.updateNetworkHealth();
+        this.calculateMetrics();
+    }
+
+    startNodePulse() {
+        if (this.pulseInterval) return;
+        let pulseUp = true;
+        this.pulseInterval = setInterval(() => {
+            const masterSize = pulseUp ? 35 : 30;
+            const workerSize = pulseUp ? 20 : 16;
+            
+            // Pulse master
+            this.graphNodes.update({ id: 'master', size: masterSize });
+
+            // Pulse active workers
+            const updates = [];
+            this.workers.forEach((worker, nodeId) => {
+                if(worker.status === 'training' || worker.status === 'aggregating') {
+                    updates.push({ id: nodeId, size: workerSize });
+                }
+            });
+            if(updates.length > 0) this.graphNodes.update(updates);
+
+            pulseUp = !pulseUp;
+        }, 800);
+    }
+
+    stopNodePulse() {
+        if (!this.pulseInterval) return;
+        clearInterval(this.pulseInterval);
+        this.pulseInterval = null;
+
+        // Reset all nodes to default size
+        const updates = [{ id: 'master', size: 30 }];
+        this.workers.forEach((worker, nodeId) => {
+            updates.push({ id: nodeId, size: 16 });
+        });
+        this.graphNodes.update(updates);
+    }
+
+    updateWorkersDisplay() {
+        const workersListEl = document.getElementById('workers-list');
+        workersListEl.innerHTML = '';
+        if(this.workers.size === 0) {
+             workersListEl.innerHTML = `<span style="font-size: 12px; color: var(--text-secondary);">No workers connected.</span>`
+             return;
+        }
+        this.workers.forEach(worker => {
+            const timeSinceHeartbeat = worker.last_heartbeat ? `${Math.floor(Date.now() / 1000 - worker.last_heartbeat)}s ago` : 'never';
+            const epochProgress = worker.current_epoch ? (worker.current_epoch / 20) * 100 : 0;
+            const workerDiv = document.createElement('div');
+            workerDiv.innerHTML = `<div style="background-color: rgba(0,0,0,0.2); border: 1px solid var(--border-color); border-radius: 6px; padding: 10px; margin-bottom: 8px; font-size: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                        <span style="font-weight: 600; color: var(--accent-hover);">${worker.node_id.substring(0, 12)}...</span>
+                        <span class="status-badge" style="margin: 0; font-size: 10px; padding: 2px 8px; background-color: ${this.getStatusColor(worker.status).background};">${worker.status.toUpperCase()}</span>
+                    </div>
+                    <div style="font-size: 11px; color: var(--text-secondary);">${worker.host}:${worker.port} | Last: ${timeSinceHeartbeat}</div>
+                    <div style="margin-top: 5px;">
+                        <div style="font-size: 11px;">Epoch: ${worker.current_epoch || 0} | Loss: ${(worker.loss || 0).toFixed(4)}</div>
+                        <div class="progress-bar" style="height: 4px; margin-top: 4px;"><div class="progress-fill" style="width: ${epochProgress}%"></div></div>
+                    </div>
+                </div>`;
+            workersListEl.appendChild(workerDiv);
+        });
+        document.getElementById('total-nodes').textContent = this.workers.size + 1;
+    }
+
+    updateNetworkHealth() {
+        const totalWorkers = this.workers.size;
+        const healthyWorkers = Array.from(this.workers.values()).filter(w => w.status !== 'failed').length;
+        const healthPercentage = totalWorkers > 0 ? Math.round((healthyWorkers / totalWorkers) * 100) : 100;
+        const healthElement = document.getElementById('network-health');
+        healthElement.textContent = `${healthPercentage}%`;
+        healthElement.style.color = healthPercentage > 80 ? 'var(--status-green)' : healthPercentage > 50 ? 'var(--status-yellow)' : 'var(--status-red)';
+    }
+
+    calculateMetrics() {
+        const activeWorkers = Array.from(this.workers.values()).filter(w => w.status !== 'failed');
+        document.getElementById('failed-workers').textContent = this.workers.size - activeWorkers.length;
+        
+        const workersInTraining = activeWorkers.filter(w => w.loss > 0 && w.status === 'training');
+        if (workersInTraining.length > 0) {
+            const avgLoss = workersInTraining.reduce((sum, w) => sum + w.loss, 0) / workersInTraining.length;
+            document.getElementById('avg-loss').textContent = avgLoss.toFixed(4);
+            
+            // Add data only if training is active to avoid flat lines
+            if (this.trainingStatus === 'training' || this.trainingStatus === 'aggregating') {
+                this.lossHistory.push(avgLoss);
+                if (this.lossHistory.length > 50) this.lossHistory.shift(); // Keep last 50 points
+                this.updateLossChart();
+            }
+        } else if (this.trainingStatus === 'idle' || this.trainingStatus === 'completed') {
+            this.lossHistory = []; // Reset history when idle
+            this.updateLossChart();
+            document.getElementById('avg-loss').textContent = 'N/A';
+        }
+    }
+
+    initLossChart() {
+        const ctx = document.getElementById('loss-chart').getContext('2d');
+        this.lossChartInstance = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Average Loss',
+                    data: [],
+                    borderColor: 'rgba(59, 130, 246, 0.8)',
+                    backgroundColor: 'rgba(59, 130, 246, 0.2)',
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    tension: 0.4,
+                    fill: true
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: { color: 'var(--text-secondary)', font: { size: 10 } },
+                        grid: { color: 'rgba(255, 255, 255, 0.05)' }
+                    },
+                    x: {
+                        ticks: { display: false },
+                        grid: { display: false }
+                    }
+                },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        mode: 'index',
+                        intersect: false,
+                        bodyColor: '#E5E7EB',
+                        backgroundColor: '#111827',
+                        borderColor: 'rgba(255, 255, 255, 0.1)',
+                        borderWidth: 1
+                    }
+                }
+            }
+        });
+    }
+
+    updateLossChart() {
+        if (!this.lossChartInstance) return;
+        // Create labels for each data point
+        this.lossChartInstance.data.labels = this.lossHistory.map((_, i) => i + 1);
+        this.lossChartInstance.data.datasets[0].data = this.lossHistory;
+        this.lossChartInstance.update('quiet'); // 'quiet' prevents animation on every update
+    }
+
+    setupEventListeners() {
+        document.getElementById('start-training').addEventListener('click', () => this.postCommand('/api/start_training', 'start'));
+        document.getElementById('stop-training').addEventListener('click', () => this.postCommand('/api/stop_training', 'stop'));
+    }
+    
+    async postCommand(url, command) {
+        try {
+            const response = await fetch(url, { method: 'POST' });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const data = await response.json();
+            this.addLog('MASTER', `Training ${command} command sent: ${data.status}`);
+        } catch (error) {
+            this.addLog('ERROR', `Failed to ${command} training: ${error.message}`);
+        }
+    }
+
+    setupDraggableWindow() {
+        const logWindow = document.getElementById('log-window');
+        const logHeader = document.getElementById('log-header');
+        let isDragging = false, isMinimized = false, originalHeight = null;
+        logHeader.addEventListener('mousedown', (e) => {
+            if (e.target.classList.contains('log-btn')) return;
+            isDragging = true;
+            const rect = logWindow.getBoundingClientRect();
+            const offsetX = e.clientX - rect.left;
+            const offsetY = e.clientY - rect.top;
+            const handleMouseMove = (e) => {
+                if (isDragging) {
+                    logWindow.style.left = (e.clientX - offsetX) + 'px';
+                    logWindow.style.top = (e.clientY - offsetY) + 'px';
+                    logWindow.style.right = 'auto';
+                    logWindow.style.bottom = 'auto';
+                }
+            };
+            const handleMouseUp = () => {
+                isDragging = false;
+                document.removeEventListener('mousemove', handleMouseMove);
+                document.removeEventListener('mouseup', handleMouseUp);
+            };
+            document.addEventListener('mousemove', handleMouseMove);
+            document.addEventListener('mouseup', handleMouseUp);
+        });
+        document.getElementById('minimize-btn').addEventListener('click', () => {
+            const content = document.getElementById('log-content');
+            if (!isMinimized) {
+                originalHeight = logWindow.style.height || '300px';
+                logWindow.style.height = '38px';
+                content.style.display = 'none';
+            } else {
+                logWindow.style.height = originalHeight;
+                content.style.display = 'block';
+            }
+            isMinimized = !isMinimized;
+        });
+        document.getElementById('maximize-btn').addEventListener('click', () => {
+            if (logWindow.style.width !== '80vw') {
+                Object.assign(logWindow.style, { width: '80vw', height: '60vh', left: '10vw', top: '20vh', right: 'auto', bottom: 'auto' });
+            } else {
+                Object.assign(logWindow.style, { width: '450px', height: '300px', right: '20px', bottom: '20px', left: 'auto', top: 'auto' });
+            }
+        });
+        document.getElementById('close-btn').addEventListener('click', () => { logWindow.style.display = 'none'; });
+    }
+
+    addLog(type, message) {
+        const log = { timestamp: new Date().toLocaleTimeString(), type, message };
+        this.logs.unshift(log);
+        if (this.logs.length > 100) this.logs.pop();
+        this.updateLogDisplay();
+    }
+
+    updateLogDisplay() {
+        const logContent = document.getElementById('log-content');
+        logContent.innerHTML = this.logs.map(log => {
+            const typeClass = `log-${log.type.toLowerCase()}`;
+            return `<div class="log-entry" style="padding: 1px 0;"><span class="log-timestamp">[${log.timestamp}]</span> <span class="${typeClass}" style="font-weight: 500;">${log.type}:</span> ${log.message}</div>`;
+        }).join('');
+    }
+    
+    updateConnectionStatus(connected) {
+        const statusEl = document.getElementById('connection-status');
+        statusEl.textContent = connected ? '🟢 Connected' : '🔴 Disconnected';
+        statusEl.className = `connection-status ${connected ? 'connected' : 'disconnected'}`;
+    }
+
+    formatTimestamp(timestamp) {
+        if (!timestamp) return 'N/A';
+        const diff = Date.now() / 1000 - timestamp;
+        if (diff < 60) return `${Math.floor(diff)}s ago`;
+        if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+        return `${Math.floor(diff / 3600)}h ago`;
+    }
+}
+        // Initialize the dashboard
+        document.addEventListener('DOMContentLoaded', () => {
+            const dashboard = new FederatedLearningDashboard();
+        });
+    </script>
+</body>
+
+</html>
